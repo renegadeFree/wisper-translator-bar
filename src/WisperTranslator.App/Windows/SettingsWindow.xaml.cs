@@ -13,6 +13,7 @@ using WisperTranslator.Core.Settings;
 using WisperTranslator.Core.Translation;
 using WisperTranslator.Core.Rendering;
 using WisperTranslator.Core.Templates;
+using WisperTranslator.Core.Updates;
 using Wpf.Ui.Controls;
 
 namespace WisperTranslator.App.Windows;
@@ -31,6 +32,7 @@ public static class SettingsTabs
     public const int Template = 5;
     public const int Storico = 6;
     public const int Ia = 7;
+    public const int Aggiornamenti = 8;
 }
 
 public partial class SettingsWindow : FluentWindow
@@ -38,7 +40,13 @@ public partial class SettingsWindow : FluentWindow
     private readonly AppSettings _settings;
     private readonly Action _onChanged;
     private bool _loading = true;
+    private bool _adjustingWords;
     private PerformancePreset _appliedPreset = PerformancePreset.Auto;
+    private ReleaseInfo? _availableRelease;
+    private bool _updating;
+
+    /// <summary>Installer pronto: la finestra principale lo avvia e chiude l'applicazione.</summary>
+    public event Action<string>? UpdateInstallRequested;
 
     public SettingsWindow(AppSettings settings, Action onChanged, int initialTab = 0)
     {
@@ -50,6 +58,7 @@ public partial class SettingsWindow : FluentWindow
         LoadAiControls();
         LoadConversationControls();
         LoadBarControls();
+        LoadUpdateControls();
         _loading = false;
         RefreshModels();
         RefreshHistory();
@@ -298,6 +307,11 @@ public partial class SettingsWindow : FluentWindow
             .First(option => option.Value == _settings.QualityTranslation);
         RefreshQualityHint();
 
+        ContinuousTranslationBox.IsChecked = _settings.ContinuousTranslation;
+        SentenceMinWordsRow.Value = _settings.SentenceMinWords;
+        SentenceMaxWordsRow.Value = _settings.SentenceMaxWords;
+        RefreshSentenceWordsHint();
+
         GpuBox.ItemsSource = new[]
         {
             new GpuOption(GpuRuntime.Nessuno, "Solo CPU (consigliato)"),
@@ -337,6 +351,176 @@ public partial class SettingsWindow : FluentWindow
                                        ?? QualityTranslationMode.Auto;
         RefreshQualityHint();
         _onChanged();
+    }
+
+    /// <summary>Continuità: le ultime due frasi finali tradotte come una sola.</summary>
+    private void OnContinuousTranslationChanged(object sender, RoutedEventArgs e)
+    {
+        if (_loading)
+        {
+            return;
+        }
+
+        _settings.ContinuousTranslation = ContinuousTranslationBox.IsChecked == true;
+        RefreshSentenceWordsHint();
+        _onChanged();
+    }
+
+    /// <summary>Range di parole per riga: sotto il minimo la frase aspetta, sopra il massimo si spezza.</summary>
+    private void OnSentenceWordsChanged(object sender, EventArgs e)
+    {
+        if (_loading || _adjustingWords)
+        {
+            return;
+        }
+
+        _adjustingWords = true;
+        try
+        {
+            _settings.SentenceMinWords = (int)Math.Round(SentenceMinWordsRow.Value);
+            _settings.SentenceMaxWords = (int)Math.Round(SentenceMaxWordsRow.Value);
+            if (_settings.SentenceMaxWords < _settings.SentenceMinWords)
+            {
+                _settings.SentenceMaxWords = _settings.SentenceMinWords;
+                SentenceMaxWordsRow.Value = _settings.SentenceMaxWords;
+            }
+
+            RefreshSentenceWordsHint();
+            _onChanged();
+        }
+        finally
+        {
+            _adjustingWords = false;
+        }
+    }
+
+    private void RefreshSentenceWordsHint()
+    {
+        if (SentenceWordsHint is null)
+        {
+            return;
+        }
+
+        var min = Math.Max(0, _settings.SentenceMinWords);
+        var max = Math.Max(min, _settings.SentenceMaxWords);
+        SentenceWordsHint.Text = min == 0
+            ? $"Le righe si chiudono sul silenzio e si spezzano oltre {max} parole. Vale solo in traduzione, fuori dalla modalità conversazione."
+            : $"Una riga si chiude su un silenzio solo dopo {min} parole (prima resta aperta, così i momenti morti non spezzano la frase) e si spezza oltre {max}. Vale solo in traduzione, fuori dalla modalità conversazione.";
+    }
+
+    // --- Aggiornamenti ---
+
+    private void LoadUpdateControls()
+    {
+        UpdateCurrentText.Text = $"Versione installata: {UpdateService.CurrentText}";
+        AutoCheckUpdatesBox.IsChecked = _settings.AutoCheckUpdates;
+        UpdateStatusText.Text = string.Empty;
+    }
+
+    private void OnAutoCheckUpdatesChanged(object sender, RoutedEventArgs e)
+    {
+        if (_loading)
+        {
+            return;
+        }
+
+        _settings.AutoCheckUpdates = AutoCheckUpdatesBox.IsChecked == true;
+        _onChanged();
+    }
+
+    private async void OnCheckUpdatesClicked(object sender, RoutedEventArgs e)
+    {
+        if (_updating)
+        {
+            return;
+        }
+
+        _updating = true;
+        UpdateCheckButton.IsEnabled = false;
+        UpdateStatusText.Text = "Controllo le release su GitHub…";
+        try
+        {
+            var release = await UpdateService.CheckAsync();
+            if (release is null)
+            {
+                _availableRelease = null;
+                UpdateInstallButton.IsEnabled = false;
+                UpdateStatusText.Text = "Non riesco a leggere le release: controlla la connessione a GitHub.";
+                return;
+            }
+
+            if (!UpdateService.IsNewer(release.Version, UpdateService.CurrentVersion))
+            {
+                _availableRelease = null;
+                UpdateInstallButton.IsEnabled = false;
+                UpdateStatusText.Text = $"Sei già aggiornato ({UpdateService.CurrentText}). Ultima release: {release.Tag}.";
+                return;
+            }
+
+            _availableRelease = release;
+            UpdateInstallButton.IsEnabled = true;
+            var size = release.Size > 0 ? $" · {release.Size / 1048576.0:0.0} MB" : string.Empty;
+            UpdateStatusText.Text = $"Disponibile la versione {release.Tag}{size}. Premi “Scarica e installa”.";
+        }
+        catch (Exception exception)
+        {
+            _availableRelease = null;
+            UpdateInstallButton.IsEnabled = false;
+            UpdateStatusText.Text = $"Controllo non riuscito: {exception.Message}";
+        }
+        finally
+        {
+            _updating = false;
+            UpdateCheckButton.IsEnabled = true;
+        }
+    }
+
+    private async void OnInstallUpdateClicked(object sender, RoutedEventArgs e)
+    {
+        if (_updating || _availableRelease is not { } release)
+        {
+            return;
+        }
+
+        _updating = true;
+        UpdateCheckButton.IsEnabled = false;
+        UpdateInstallButton.IsEnabled = false;
+        UpdateProgress.Visibility = Visibility.Visible;
+        UpdateProgress.Value = 0;
+        UpdateStatusText.Text = "Scarico l'installer…";
+        try
+        {
+            var progress = new Progress<double>(value =>
+            {
+                UpdateProgress.Value = value;
+                UpdateStatusText.Text = $"Scarico l'installer… {value:P0}";
+            });
+            var download = await UpdateService.DownloadAsync(release, progress);
+            UpdateStatusText.Text = download.Verified
+                ? "Firma SHA-256 verificata. Avvio l'installazione…"
+                : "Download completato (firma non disponibile sulla release). Avvio l'installazione…";
+            UpdateInstallRequested?.Invoke(download.Path);
+        }
+        catch (Exception exception)
+        {
+            UpdateStatusText.Text = $"Aggiornamento non riuscito: {exception.Message}";
+            UpdateInstallButton.IsEnabled = true;
+        }
+        finally
+        {
+            _updating = false;
+            UpdateCheckButton.IsEnabled = true;
+            UpdateProgress.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    /// <summary>Errore nell'avvio dell'installer, mostrato nella scheda Aggiornamenti.</summary>
+    public void ShowUpdateError(string message)
+    {
+        UpdateStatusText.Text = $"Aggiornamento non riuscito: {message}";
+        UpdateInstallButton.IsEnabled = _availableRelease is not null;
+        UpdateCheckButton.IsEnabled = true;
+        _updating = false;
     }
 
     /// <summary>Stato reale dei modelli di rifinitura: quanto pesano e se sono pronti.</summary>

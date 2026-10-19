@@ -2,7 +2,7 @@
 ; Compila con:  iscc installer.iss   (oppure esegui installer/build.ps1)
 
 #define AppName "Wisper Translator"
-#define AppVersion "2.51"
+#define AppVersion "2.52"
 #define AppPublisher "Wisper Translator"
 #define AppExeName "WisperTranslator.App.exe"
 #define SourceDir "..\publish\app"
@@ -54,6 +54,8 @@ Name: "{userstartup}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Parameters: "
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "Avvia {#AppName}"; Flags: nowait postinstall skipifsilent
 Filename: "{app}\{#AppExeName}"; Parameters: "--settings"; Description: "Apri le impostazioni per scaricare i modelli"; Flags: nowait postinstall skipifsilent unchecked
+; Aggiornamento silenzioso avviato dall'app (/UPDATE): la riapre al termine.
+Filename: "{app}\{#AppExeName}"; Flags: nowait; Check: IsUpdateRun
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\tools"
@@ -63,6 +65,13 @@ Type: filesandordirs; Name: "{app}\tools"
 Filename: "{cmd}"; Parameters: "/C taskkill /IM {#AppExeName} /F"; Flags: runhidden; RunOnceId: "KillApp"
 
 [Code]
+{ Un aggiornamento lanciato dall'app usa /VERYSILENT ... /UPDATE: senza questa voce
+  l'installazione silenziosa lascerebbe il programma chiuso. }
+function IsUpdateRun(): Boolean;
+begin
+  Result := WizardSilent and (Pos('/UPDATE', Uppercase(GetCmdTail)) > 0);
+end;
+
 function InitializeSetup(): Boolean;
 var
   ResultCode: Integer;

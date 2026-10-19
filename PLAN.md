@@ -1382,6 +1382,35 @@ che riempiva tutto l'HWND mentre il pannello disegnava il proprio rettangolo arr
 | D-56 | Il velo del pannello scende a ~0,3 mentre prima copriva il 72% | Sopra l'acrilico il velo pieno nascondeva il vetro: la barra era un rettangolo scuro |
 | D-57 | Correzione ripresa da [HWWidget](https://github.com/renegadeFree/HWWidget) (`Backdrop.cs`, `MainWindow.xaml.cs`) | È una implementazione già collaudata dall'utente per la stessa piattaforma: meno tentativi, stesso risultato |
 
+## 20. Lavorazione — continuità fra frasi e range di parole (F38)
+
+Richiesta dell'utente (2026-10-19): le righe tradotte "saltano" da una frase all'altra (pronomi,
+termini, accordi). Serve una passata sulle **ultime due frasi**, e la possibilità di decidere
+quante parole compongono una riga, così un silenzio breve non spezza la frase.
+
+### Cosa fa adesso
+
+| # | Attività | Esito |
+|---|---|---|
+| F38.1 | La passata di qualità non lavora più frase per frase quando c'è la continuità: prende le **ultime due battute finali**, toglie il punto della prima e le traduce **come una sola** | ✅ `SentenceWindow.Join` |
+| F38.2 | Trigger a fine frase; una frase nuova annulla la coppia precedente (latest-wins), così non si accodano traduzioni vecchie | ✅ |
+| F38.3 | Il risultato va sulla battuta più recente; la segmentazione originale resta intatta (due righe, due originali) | ✅ |
+| F38.4 | Range di parole per riga (minimo/massimo, predefinito 8–15): sotto il minimo il silenzio non chiude la frase, sopra il massimo la riga si spezza | ✅ `SentenceWindow.Split`, finestre per corsia |
+| F38.5 | La finestra riusa la stessa riga per gli enunciati assorbiti: niente righe fantasma; una ri-decodifica sostituisce il testo invece di accodarlo | ✅ |
+| F38.6 | Tetto di 10 s: una riga corta non resta aperta per sempre | ✅ |
+| F38.7 | Vale solo con la traduzione attiva e **fuori** dalla modalità conversazione | ✅ |
+| F38.8 | Impostazioni: casella "Continuità" e due slider per il range, con la spiegazione del comportamento | ✅ |
+
+**Decisioni F38:**
+
+| # | Decisione | Perché |
+|---|---|---|
+| D-58 | Due passate, non tre: la rifinitura frase per frase è sostituita da quella sulle due frasi quando l'opzione è attiva | Tre traduzioni dello stesso testo sono lavoro sprecato: la coppia contiene già la frase |
+| D-59 | La coppia usa il motore di alta qualità (Marian ONNX), non l'IA | Resta locale e deterministica; l'IA introdurrebbe invenzioni |
+| D-60 | Il risultato unito va sulla riga più recente e la precedente resta com'è | La segmentazione originale resta leggibile; la riga nuova è quella che si sta leggendo |
+| D-61 | Il range di parole si applica al testo, non all'audio | Il VAD non sa quante parole sono state dette: il conteggio si fa sulla trascrizione |
+| D-62 | Split proporzionale ai tempi delle parole | Il taglio a N parole non ha un tempo reale: la stima proporzionale tiene ordinati storico e SRT |
+
 - **Loopback**: cattura dell'audio che il PC sta riproducendo, senza cavi né "Stereo Mix".
 - **VAD**: rilevatore di attività vocale; separa parlato e silenzio.
 - **Enunciato**: porzione di audio compresa tra due silenzi, inviata all'ASR.

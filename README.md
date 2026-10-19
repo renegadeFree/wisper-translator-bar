@@ -46,6 +46,19 @@ Gli screenshot nativi seguenti sono aggiornati alla versione corrente.
   [PLAN.md](PLAN.md#18-lavorazione--traduzione-istantanea-a-due-corsie-e-barra-ridimensionabile-f34f36).
 - **Barra ridimensionabile** con slider di altezza e trasparenza del vetro (55–92%).
 
+## Novità della versione 2.52
+
+- **Continuità fra le frasi**: con l'opzione attiva il motore di qualità traduce insieme le
+  ultime due frasi finali, come una sola. La rifinitura frase per frase lascia il posto a questa
+  passata: la pipeline resta veloce (tradotto subito) più una sola rifinitura.
+- **Range di parole per riga**: minimo e massimo configurabili (predefinito 8–15). Sotto il
+  minimo un silenzio non chiude più la frase — così i momenti morti non la spezzano — e oltre il
+  massimo la riga si spezza. Vale solo in traduzione e fuori dalla modalità conversazione.
+- **Aggiornamenti da GitHub**: scheda *Aggiornamenti* nelle impostazioni. Controlla l'ultima
+  release, scarica l'installer, ne verifica lo SHA-256 e lo avvia in silenzio; al termine
+  l'applicazione si riapre da sola. Il controllo all'avvio è attivo per impostazione predefinita
+  e non scarica nulla senza un tuo clic.
+
 ## Novità della versione 2.2
 
 - **Barra rifatta da zero**: non è più un ovale disegnato dentro il rettangolo acrilico di Windows.

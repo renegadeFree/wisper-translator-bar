@@ -43,6 +43,71 @@ public sealed class TranscriptionSession : IAsyncDisposable
     private readonly Dictionary<(int Lane, int Utterance), int> _cueIds = [];
 
     private int _nextCueId;
+
+    /// <summary>Ultime battute finali: la passata di continuità traduce le ultime due come una sola.</summary>
+    private readonly List<int> _recentFinalCues = [];
+    private readonly object _continuityGate = new();
+    private CancellationTokenSource? _continuityCancellation;
+
+    /// <summary>Righe in attesa di raggiungere il minimo di parole prima di chiudersi.</summary>
+    private readonly Dictionary<int, WordWindow> _wordWindows = [];
+
+    /// <summary>Oltre questo tempo una riga corta si chiude comunque: niente attese eterne.</summary>
+    private static readonly TimeSpan WordWindowLimit = TimeSpan.FromSeconds(10);
+
+    private const string TranslationLaneFast = "rapida";
+    private const string TranslationLaneQuality = "qualità";
+    private const string TranslationLaneContinuity = "due frasi";
+
+    /// <summary>
+    /// Una riga in costruzione: gli enunciati già chiusi più l'ipotesi di quello in corso.
+    /// Tenere separati i pezzi permette di sostituire una ri-decodifica senza duplicarla.
+    /// </summary>
+    private sealed class WordWindow(int cueId, TimeSpan start, int speaker)
+    {
+        public int CueId { get; } = cueId;
+        public TimeSpan Start { get; } = start;
+        public int Speaker { get; } = speaker;
+
+        /// <summary>Enunciati chiusi dentro la finestra (identificativo + testo definitivo).</summary>
+        public List<(int Utterance, string Text)> Closed { get; } = [];
+
+        /// <summary>Ipotesi dell'enunciato in corso, non ancora definitiva.</summary>
+        public string Partial { get; set; } = string.Empty;
+
+        public string Text
+        {
+            get
+            {
+                var text = string.Empty;
+                foreach (var part in Closed)
+                {
+                    text = text.Length == 0 ? part.Text : SentenceWindow.Join(text, part.Text);
+                }
+
+                if (Partial.Length == 0)
+                {
+                    return text;
+                }
+
+                return text.Length == 0 ? Partial : SentenceWindow.Join(text, Partial);
+            }
+        }
+
+        /// <summary>Testo definitivo: chiude l'enunciato in corso e sostituisce una ri-decodifica.</summary>
+        public void Close(int utterance, string text)
+        {
+            Partial = string.Empty;
+            if (Closed.Count > 0 && Closed[^1].Utterance == utterance)
+            {
+                Closed[^1] = (utterance, text);
+                return;
+            }
+
+            Closed.Add((utterance, text));
+        }
+    }
+
     private TranslationServer? _translationServer;
     private TranslationService? _translationService;
     private TranslationService? _qualityTranslationService;
@@ -84,6 +149,9 @@ public sealed class TranscriptionSession : IAsyncDisposable
 
     /// <summary>Quante rifiniture di qualità sono andate a schermo: diagnostica e test.</summary>
     public long QualityPasses { get; private set; }
+
+    /// <summary>Quante volte la coppia di frasi è stata ritradotta per continuità.</summary>
+    public long ContinuityPasses { get; private set; }
 
     /// <summary>Storico locale: viene creato automaticamente al primo avvio della sessione.</summary>
     public SessionStore? History => _history;
@@ -553,6 +621,13 @@ public sealed class TranscriptionSession : IAsyncDisposable
         var speaker = lane.SpeakerIsFixed
             ? lane.Speaker
             : turns is { Count: 1 } single ? single[0].Speaker : Speakers.Unknown;
+
+        if (WordWindowEnabled)
+        {
+            PublishWithWordWindow(lane, update, speaker);
+            return;
+        }
+
         PublishCue(
             ResolveCueId(lane.Index, update.UtteranceId),
             speaker,
@@ -562,6 +637,124 @@ public sealed class TranscriptionSession : IAsyncDisposable
             update.Duration,
             update.Provisional,
             update.Latency);
+    }
+
+    /// <summary>Vero quando ogni riga deve rispettare il range di parole scelto.</summary>
+    private bool WordWindowEnabled =>
+        Options.Translate
+        && !Options.ConversationMode
+        && Options.SentenceMaxWords > 1;
+
+    /// <summary>
+    /// Impagina la battuta nel range di parole: sotto il minimo il silenzio non chiude la frase
+    /// (il testo resta in attesa della continuazione), sopra il massimo la riga si spezza.
+    /// Parziali e definitivi della stessa finestra condividono la riga, quindi il testo cresce
+    /// senza salti e un parziale in ritardo non crea una riga fantasma.
+    /// </summary>
+    private void PublishWithWordWindow(Lane lane, TranscriptUpdate update, int speaker)
+    {
+        WordWindow? window;
+        lock (_cueGate)
+        {
+            _wordWindows.TryGetValue(lane.Index, out window);
+        }
+
+        var cueId = window?.CueId ?? ResolveCueId(lane.Index, update.UtteranceId);
+        lock (_cueGate)
+        {
+            _cueIds[(lane.Index, update.UtteranceId)] = cueId;
+        }
+
+        var start = window?.Start ?? update.Start;
+        var end = update.Start + update.Duration;
+
+        if (window is null)
+        {
+            window = new WordWindow(cueId, start, speaker);
+        }
+
+        if (!update.IsFinal)
+        {
+            // L'ipotesi dell'enunciato in corso si sostituisce, non si accoda.
+            window.Partial = update.Text.Trim();
+            PublishCue(cueId, speaker, window.Text, isFinal: false, start, end - start, window.Text, update.Latency);
+            SetWordWindow(lane.Index, window);
+            return;
+        }
+
+        window.Close(update.UtteranceId, update.Text.Trim());
+        var text = window.Text;
+
+        var min = Math.Max(1, Options.SentenceMinWords);
+        var max = Math.Max(min, Options.SentenceMaxWords);
+        var pending = text;
+        var pendingStart = start;
+        var pendingCue = cueId;
+
+        while (SentenceWindow.CountWords(pending) > max)
+        {
+            var (head, tail) = SentenceWindow.Cut(pending, max);
+            var headEnd = SplitEnd(
+                pendingStart,
+                end,
+                SentenceWindow.CountWords(head),
+                SentenceWindow.CountWords(pending));
+            PublishCue(pendingCue, speaker, head, isFinal: true, pendingStart, headEnd - pendingStart,
+                provisional: string.Empty, update.Latency);
+            pendingCue = NextCueId();
+            pendingStart = headEnd;
+            pending = tail;
+        }
+
+        var forceClose = end - pendingStart >= WordWindowLimit;
+        if (SentenceWindow.CountWords(pending) >= min || forceClose)
+        {
+            PublishCue(pendingCue, speaker, pending, isFinal: true, pendingStart, end - pendingStart,
+                provisional: string.Empty, update.Latency);
+            ClearWordWindow(lane.Index);
+            return;
+        }
+
+        // Pausa prima del minimo: la riga resta aperta e aspetta la continuazione.
+        PublishCue(pendingCue, speaker, pending, isFinal: false, pendingStart, end - pendingStart, pending,
+            update.Latency);
+        // Se la riga è stata spezzata, il resto riparte con una finestra nuova; altrimenti la
+        // finestra tiene già tutti i pezzi chiusi.
+        if (pendingCue != cueId)
+        {
+            window = new WordWindow(pendingCue, pendingStart, speaker);
+            window.Closed.Add((update.UtteranceId, pending));
+        }
+
+        SetWordWindow(lane.Index, window);
+    }
+
+    /// <summary>Stima il confine di una riga spezzata, proporzionale alle parole.</summary>
+    private static TimeSpan SplitEnd(TimeSpan start, TimeSpan end, int headWords, int totalWords)
+    {
+        if (totalWords <= 0)
+        {
+            return end;
+        }
+
+        var span = end - start;
+        return start + TimeSpan.FromTicks((long)(span.Ticks * (double)headWords / totalWords));
+    }
+
+    private void SetWordWindow(int lane, WordWindow window)
+    {
+        lock (_cueGate)
+        {
+            _wordWindows[lane] = window;
+        }
+    }
+
+    private void ClearWordWindow(int lane)
+    {
+        lock (_cueGate)
+        {
+            _wordWindows.Remove(lane);
+        }
     }
 
     /// <summary>Id stabile per la coppia corsia+enunciato: parziali e finale restano la stessa riga.</summary>
@@ -637,6 +830,11 @@ public sealed class TranscriptionSession : IAsyncDisposable
         {
             ScheduleTranslation(cue, isFinal);
         }
+
+        if (isFinal)
+        {
+            ScheduleContinuityPass(cue.Id);
+        }
     }
 
     /// <summary>
@@ -652,10 +850,15 @@ public sealed class TranscriptionSession : IAsyncDisposable
             if (_disposed) return;
             if (!_translationLanes.TryGetValue(cue.Id, out var existing))
             {
+                // Con la continuità attiva la rifinitura frase per frase è sostituita dalla
+                // passata sulle ultime due frasi: la corsia resta istantanea.
+                var perSentenceQuality = ContinuityPassEnabled
+                    ? null
+                    : _qualityTranslationService;
                 existing = new CueTranslationLane(
                     cue.Id,
                     _translationService!,
-                    _qualityTranslationService,
+                    perSentenceQuality,
                     _fastTranslationGate,
                     _qualityTranslationGate,
                     () => (Options.SourceLanguage, Options.TargetLanguage),
@@ -686,8 +889,108 @@ public sealed class TranscriptionSession : IAsyncDisposable
         lane.Dispose();
     }
 
+    /// <summary>Vero quando la passata sulle due frasi può lavorare.</summary>
+    private bool ContinuityPassEnabled =>
+        Options.Translate
+        && !Options.ConversationMode
+        && Options.ContinuousTranslation
+        && Options.TranslationPipeline == TranslationPipelineMode.DualPass
+        && _qualityTranslationService is not null;
+
+    /// <summary>
+    /// Passata di continuità: appena una frase si chiude, le ultime due si traducono **come una
+    /// sola** (con il motore di qualità). Una frase nuova annulla la coppia precedente: vince
+    /// sempre la più recente, così non si accodano traduzioni vecchie.
+    /// </summary>
+    private void ScheduleContinuityPass(int cueId)
+    {
+        if (!ContinuityPassEnabled)
+        {
+            return;
+        }
+
+        int firstId, lastId;
+        CancellationToken token;
+        lock (_continuityGate)
+        {
+            if (!_recentFinalCues.Contains(cueId))
+            {
+                _recentFinalCues.Add(cueId);
+            }
+
+            while (_recentFinalCues.Count > 2)
+            {
+                _recentFinalCues.RemoveAt(0);
+            }
+
+            lastId = _recentFinalCues[^1];
+            // Con una sola frase (inizio sessione) si rifinisce quella da sola.
+            firstId = _recentFinalCues.Count >= 2 ? _recentFinalCues[^2] : lastId;
+            _continuityCancellation?.Cancel();
+            _continuityCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+                _cancellation?.Token ?? CancellationToken.None);
+            token = _continuityCancellation.Token;
+        }
+
+        _ = Task.Run(() => RunContinuityAsync(firstId, lastId, token), token);
+    }
+
+    private async Task RunContinuityAsync(int firstId, int lastId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            string first, last;
+            lock (_cueGate)
+            {
+                if (_disposed
+                    || !_cues.TryGetValue(firstId, out var firstCue)
+                    || !_cues.TryGetValue(lastId, out var lastCue))
+                {
+                    return;
+                }
+
+                first = firstCue.Original;
+                last = lastCue.Original;
+            }
+
+            var text = firstId == lastId ? last : SentenceWindow.Join(first, last);
+            if (SentenceWindow.CountWords(text) == 0)
+            {
+                return;
+            }
+
+            await _qualityTranslationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var result = await _qualityTranslationService!
+                    .TranslateAsync(text, Options.SourceLanguage, Options.TargetLanguage, cancellationToken)
+                    .ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (result.Text.Length > 0)
+                {
+                    PublishTranslation(lastId, result.Text, TranslationLaneContinuity);
+                }
+            }
+            finally
+            {
+                _qualityTranslationGate.Release();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // è arrivata una frase nuova: vince quella
+        }
+        catch (Exception exception)
+        {
+            StatusChanged?.Invoke($"Continuità non disponibile: {exception.Message}");
+        }
+    }
+
     /// <summary>La traduzione appena pronta aggiorna la battuta senza riordinare l'elenco.</summary>
-    private void PublishTranslation(int cueId, string translation, bool quality)
+    private void PublishTranslation(int cueId, string translation, bool quality) =>
+        PublishTranslation(cueId, translation, quality ? TranslationLaneQuality : TranslationLaneFast);
+
+    private void PublishTranslation(int cueId, string translation, string lane)
     {
         Cue updated;
         lock (_cueGate)
@@ -698,21 +1001,25 @@ public sealed class TranscriptionSession : IAsyncDisposable
             _cues[cueId] = updated;
         }
 
-        if (quality)
+        if (lane == TranslationLaneQuality)
         {
             QualityPasses++;
+        }
+        else if (lane == TranslationLaneContinuity)
+        {
+            ContinuityPasses++;
         }
 
         CueUpdated?.Invoke(updated);
         SaveHistoryCue(updated.Id);
-        WriteTranslationDiagnostic(updated, quality);
+        WriteTranslationDiagnostic(updated, lane);
     }
 
     /// <summary>
     /// Una riga JSON per traduzione pubblicata: serve a misurare sul campo quanto ci mette la
     /// corsia rapida e quando arriva la rifinitura di qualità.
     /// </summary>
-    private void WriteTranslationDiagnostic(Cue cue, bool quality)
+    private void WriteTranslationDiagnostic(Cue cue, string lane)
     {
         if (_diagnosticPath is null)
         {
@@ -723,7 +1030,7 @@ public sealed class TranscriptionSession : IAsyncDisposable
         {
             t = DateTime.Now.ToString("HH:mm:ss.fff"),
             utterance = cue.Id,
-            lane = quality ? "qualità" : "rapida",
+            lane,
             final = cue.IsFinal,
             chars = cue.Original.Length,
             original = cue.Original,

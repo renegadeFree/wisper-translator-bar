@@ -161,6 +161,24 @@
                         <Button Content="Scarica i modelli di rifinitura (Marian ONNX)" Padding="10,4" Margin="0,8,0,0"
                                 Click="OnDownloadQualityModelsClicked" />
 
+                        <CheckBox x:Name="ContinuousTranslationBox" Margin="0,14,0,0"
+                                  Content="Continuità: traduci le ultime due frasi come una sola"
+                                  Checked="OnContinuousTranslationChanged" Unchecked="OnContinuousTranslationChanged" />
+                        <TextBlock Margin="0,4,0,6" TextWrapping="Wrap" FontSize="11"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                   Text="Con l'opzione attiva il motore di qualità riceve le ultime due frasi finali unite in una frase sola: pronomi e termini non cambiano più da una riga all'altra. Vale solo con la traduzione attiva e fuori dalla modalità conversazione." />
+
+                        <controls:SliderRow x:Name="SentenceMinWordsRow" Label="Parole minime per riga"
+                                            Margin="0,6,0,0" Minimum="0" Maximum="40" TickFrequency="1"
+                                            ValueFormat="{}{0:0} parole" ZeroText="nessun minimo"
+                                            ValueChanged="OnSentenceWordsChanged" />
+                        <controls:SliderRow x:Name="SentenceMaxWordsRow" Label="Parole massime per riga"
+                                            Margin="0,10,0,0" Minimum="2" Maximum="60" TickFrequency="1"
+                                            ValueFormat="{}{0:0} parole"
+                                            ValueChanged="OnSentenceWordsChanged" />
+                        <TextBlock x:Name="SentenceWordsHint" Margin="0,6,0,0" TextWrapping="Wrap" FontSize="11"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+
                         <Separator Margin="0,16,0,12" />
                         <TextBlock Text="Accelerazione GPU (sperimentale)" Margin="0,0,0,4" />
                         <ComboBox x:Name="GpuBox" DisplayMemberPath="Label" SelectionChanged="OnGpuChanged" />
@@ -456,6 +474,39 @@
                         <TextBlock Margin="0,14,0,0" TextWrapping="Wrap" FontSize="11"
                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                    Text="Con Ollama (locale) e LM Studio nessun dato esce dal PC. Con i provider cloud il testo della sessione viene inviato al servizio scelto e la chiave resta salvata solo su questo computer." />
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <TabItem Header="Aggiornamenti">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="4,8,12,8">
+                    <StackPanel>
+                        <TextBlock Text="Aggiornamenti da GitHub" FontWeight="SemiBold" Margin="0,0,0,8" />
+                        <TextBlock x:Name="UpdateCurrentText" Margin="0,0,0,10" />
+                        <TextBlock Margin="0,0,0,12" TextWrapping="Wrap" FontSize="11"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                   Text="Il controllo legge l'ultima release pubblicata su GitHub. L'installer viene scaricato, verificato con lo SHA-256 della release e avviato in silenzio: al termine l'applicazione si riapre da sola." />
+
+                        <StackPanel Orientation="Horizontal">
+                            <ui:Button x:Name="UpdateCheckButton" Content="Controlla aggiornamenti"
+                                       Icon="{ui:SymbolIcon ArrowSync24}" Padding="12,5"
+                                       Click="OnCheckUpdatesClicked" />
+                            <ui:Button x:Name="UpdateInstallButton" Content="Scarica e installa"
+                                       Icon="{ui:SymbolIcon ArrowDownload24}" Padding="12,5" Margin="8,0,0,0"
+                                       IsEnabled="False" Click="OnInstallUpdateClicked" />
+                        </StackPanel>
+
+                        <ProgressBar x:Name="UpdateProgress" Height="4" Margin="0,14,0,0"
+                                     Minimum="0" Maximum="1" Visibility="Collapsed" />
+                        <TextBlock x:Name="UpdateStatusText" Margin="0,10,0,0" TextWrapping="Wrap"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+
+                        <CheckBox x:Name="AutoCheckUpdatesBox" Margin="0,16,0,0"
+                                  Content="Controlla gli aggiornamenti all'avvio"
+                                  Checked="OnAutoCheckUpdatesChanged" Unchecked="OnAutoCheckUpdatesChanged" />
+                        <TextBlock Margin="0,6,0,0" TextWrapping="Wrap" FontSize="11"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                   Text="Il controllo all'avvio non scarica nulla: se c'è una versione nuova lo segnala e l'aggiornamento resta a un tuo clic." />
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>

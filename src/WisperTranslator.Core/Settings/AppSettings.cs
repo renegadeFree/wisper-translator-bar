@@ -91,6 +91,21 @@ public sealed class AppSettings
     /// <summary>Secondo stadio di traduzione (modello Marian ONNX): auto, spento o forzato.</summary>
     public QualityTranslationMode QualityTranslation { get; set; } = QualityTranslationMode.Auto;
 
+    /// <summary>
+    /// Continuità fra frasi: il motore di qualità traduce le ultime due frasi finali come una
+    /// sola. Solo in traduzione, mai in conversazione.
+    /// </summary>
+    public bool ContinuousTranslation { get; set; } = true;
+
+    /// <summary>Parole minime perché una riga si chiuda su un silenzio (0 = chiusura solo sul silenzio).</summary>
+    public int SentenceMinWords { get; set; } = 8;
+
+    /// <summary>Parole massime per riga: oltre, la riga si spezza.</summary>
+    public int SentenceMaxWords { get; set; } = 15;
+
+    /// <summary>Controlla le release su GitHub all'avvio; il download resta sempre a un clic.</summary>
+    public bool AutoCheckUpdates { get; set; } = true;
+
     /// <summary>Modalità conversazione: microfono "Tu" e audio di sistema con i nomi dei parlanti.</summary>
     public bool ConversationMode { get; set; }
 
@@ -230,6 +245,9 @@ public sealed class AppSettings
         if (!Enum.IsDefined(BarText)) BarText = BarTextMode.Entrambi;
         if (!Enum.IsDefined(TranslationPipeline)) TranslationPipeline = TranslationPipelineMode.DualPass;
         if (!Enum.IsDefined(QualityTranslation)) QualityTranslation = QualityTranslationMode.Auto;
+        SentenceMinWords = Math.Clamp(SentenceMinWords, 0, 40);
+        SentenceMaxWords = Math.Clamp(SentenceMaxWords, 2, 60);
+        if (SentenceMaxWords < SentenceMinWords) SentenceMaxWords = SentenceMinWords;
         FontSize = double.IsFinite(FontSize) ? Math.Clamp(FontSize, 10, 48) : 16;
         OverlayFontSize = double.IsFinite(OverlayFontSize) ? Math.Clamp(OverlayFontSize, 12, 96) : 30;
         Opacity = double.IsFinite(Opacity) ? Math.Clamp(Opacity, 0.2, 1) : 0.95;
@@ -277,6 +295,9 @@ public sealed class AppSettings
             Translate = Translate,
             TranslationPipeline = TranslationPipeline,
             QualityTranslation = QualityTranslation,
+            ContinuousTranslation = ContinuousTranslation,
+            SentenceMinWords = SentenceMinWords,
+            SentenceMaxWords = SentenceMaxWords,
             SystemAudio = SystemAudio,
             Microphone = Microphone,
             ConversationMode = ConversationMode,

@@ -81,6 +81,21 @@ public sealed class SessionOptions
     /// </summary>
     public QualityTranslationMode QualityTranslation { get; set; } = QualityTranslationMode.Auto;
 
+    /// <summary>
+    /// Continuità fra frasi: il motore di qualità traduce le ultime due frasi finali come una
+    /// sola, al posto della rifinitura frase per frase. Solo in traduzione, mai in conversazione.
+    /// </summary>
+    public bool ContinuousTranslation { get; set; }
+
+    /// <summary>
+    /// Parole minime perché una riga si chiuda su un silenzio. Sotto questa soglia il testo resta
+    /// in attesa della continuazione, così i momenti morti non spezzano la frase.
+    /// </summary>
+    public int SentenceMinWords { get; set; }
+
+    /// <summary>Parole massime per riga: oltre, la riga si spezza.</summary>
+    public int SentenceMaxWords { get; set; }
+
     public int RetentionDays { get; set; }
 
     /// <summary>

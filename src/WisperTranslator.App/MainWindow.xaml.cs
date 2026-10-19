@@ -164,6 +164,37 @@ public partial class MainWindow : FluentWindow
         {
             StartupRegistration.Set(_settings.StartWithWindows);
         }
+
+        if (_settings.AutoCheckUpdates)
+        {
+            _ = CheckForUpdatesAsync();
+        }
+    }
+
+    /// <summary>
+    /// Controllo silenzioso all'avvio: se c'è una release più nuova lo segnala con un avviso,
+    /// senza scaricare nulla. Offline e limite dell'API restano invisibili all'utente.
+    /// </summary>
+    private async Task CheckForUpdatesAsync()
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(8));
+            var release = await Core.Updates.UpdateService.CheckAsync();
+            if (release is null
+                || !Core.Updates.UpdateService.IsNewer(release.Version, Core.Updates.UpdateService.CurrentVersion))
+            {
+                return;
+            }
+
+            _tray?.ShowBalloon(
+                "Aggiornamento disponibile",
+                $"Wisper Translator {release.Tag}: apri Impostazioni → Aggiornamenti.");
+        }
+        catch (Exception)
+        {
+            // offline o limite API: nessun disturbo all'avvio
+        }
     }
 
     private void UpdateLevel()
@@ -1082,9 +1113,22 @@ public partial class MainWindow : FluentWindow
             return;
         }
 
-        _settingsWindow = new SettingsWindow(_settings, ApplySettings, tab);
-        _settingsWindow.Closed += (_, _) => _settingsWindow = null;
-        _settingsWindow.Show();
+        var window = new SettingsWindow(_settings, ApplySettings, tab);
+        window.UpdateInstallRequested += path =>
+        {
+            try
+            {
+                Core.Updates.UpdateService.StartInstaller(path);
+                ExitApplication();
+            }
+            catch (Exception exception)
+            {
+                window.ShowUpdateError(exception.Message);
+            }
+        };
+        window.Closed += (_, _) => _settingsWindow = null;
+        _settingsWindow = window;
+        window.Show();
     }
 
     /// <summary>Applica le preferenze cambiate nella finestra impostazioni.</summary>
