@@ -49,6 +49,20 @@ public sealed class SpeechSegmenter : IDisposable
 
     public bool InSpeech => _detector.InSpeech;
 
+    /// <summary>
+    /// Il silenzio non chiude l'enunciato finché non è raggiunto il minimo di parole: l'audio
+    /// resta nello stesso enunciato e viene trascritto come una frase sola, senza incollare
+    /// due trascrizioni separate.
+    /// </summary>
+    public bool HoldSilence
+    {
+        get => _detector.HoldSilence;
+        set => _detector.HoldSilence = value;
+    }
+
+    /// <summary>Chiude l'enunciato al prossimo frame (massimo di parole raggiunto).</summary>
+    public void RequestClose() => _detector.RequestClose();
+
     public int CurrentUtteranceSamples => _utterance.Count;
 
     /// <summary>Inizio dell'enunciato in corso, in tempo audio.</summary>

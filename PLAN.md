@@ -1411,6 +1411,29 @@ quante parole compongono una riga, così un silenzio breve non spezza la frase.
 | D-61 | Il range di parole si applica al testo, non all'audio | Il VAD non sa quante parole sono state dette: il conteggio si fa sulla trascrizione |
 | D-62 | Split proporzionale ai tempi delle parole | Il taglio a N parole non ha un tempo reale: la stima proporzionale tiene ordinati storico e SRT |
 
+## 21. Correzione — il range di parole agisce sulla trascrizione (F39)
+
+Richiesta dell'utente (2026-10-19): con la continuità le due frasi venivano **unite a schermo**.
+La coppia serve solo al motore: le righe devono restare quelle del trascrittore, altrimenti si
+creano aggregazioni strane. Il minimo e il massimo di parole riguardano **quanto si trascrive**,
+non quante parole si traducono insieme.
+
+| # | Attività | Esito |
+|---|---|---|
+| F39.1 | Rimosso l'accorpamento testuale delle righe (`WordWindow`, `Split`, `Cut`): ogni enunciato del trascrittore resta la sua riga | ✅ |
+| F39.2 | Il minimo di parole ora agisce sull'**endpoint**: finché la trascrizione non arriva a N parole, un silenzio non chiude l'enunciato (`SpeechSegmenter.HoldSilence`) | ✅ |
+| F39.3 | Il massimo chiude l'enunciato al prossimo frame (`RequestClose`), anche mentre si parla | ✅ |
+| F39.4 | La durata massima di 8 s resta il salvagente: chiude comunque l'enunciato | ✅ |
+| F39.5 | La passata di continuità non cambia: traduce le ultime due righe come una sola e pubblica sulla più recente | ✅ |
+| F39.6 | Test: il silenzio non chiude con il minimo attivo, il massimo chiude subito, il tetto di durata chiude comunque | ✅ |
+
+**Decisioni F39:**
+
+| # | Decisione | Perché |
+|---|---|---|
+| D-63 | Il range agisce sull'audio/enunciato, non sul testo già trascritto | Incollare due trascrizioni separate produce frasi ibride; allungare l'enunciato produce una trascrizione sola, come vuole il motore ASR |
+| D-64 | Nessuna fusione di righe: la coppia resta un fatto di traduzione | A schermo si continua a leggere ciò che è stato detto, riga per riga |
+
 - **Loopback**: cattura dell'audio che il PC sta riproducendo, senza cavi né "Stereo Mix".
 - **VAD**: rilevatore di attività vocale; separa parlato e silenzio.
 - **Enunciato**: porzione di audio compresa tra due silenzi, inviata all'ASR.

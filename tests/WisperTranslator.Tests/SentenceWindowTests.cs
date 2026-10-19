@@ -26,57 +26,6 @@ public sealed class SentenceWindowTests
     }
 
     [Fact]
-    public void LeRigheRispettanoIlMassimoEChiudonoSoloAlMinimo()
-    {
-        var text = string.Join(' ', Enumerable.Range(1, 20).Select(i => $"parola{i}"));
-        var (rows, leftover) = SentenceWindow.Split(text, minWords: 8, maxWords: 15);
-
-        Assert.Single(rows);
-        Assert.Equal(15, SentenceWindow.CountWords(rows[0]));
-        Assert.Equal("parola16 parola17 parola18 parola19 parola20", leftover);
-    }
-
-    [Fact]
-    public void SottoIlMinimoLaRigaRestaAperta()
-    {
-        var (rows, leftover) = SentenceWindow.Split("una frase molto corta", minWords: 8, maxWords: 15);
-
-        Assert.Empty(rows);
-        Assert.Equal("una frase molto corta", leftover);
-    }
-
-    [Fact]
-    public void SopraIlMinimoLaRigaSiChiude()
-    {
-        var text = string.Join(' ', Enumerable.Range(1, 10).Select(i => $"parola{i}"));
-        var (rows, leftover) = SentenceWindow.Split(text, minWords: 8, maxWords: 15);
-
-        Assert.Single(rows);
-        Assert.Equal(string.Empty, leftover);
-    }
-
-    [Fact]
-    public void UnaFraseLungaSiSpezzaInPiuRighe()
-    {
-        var text = string.Join(' ', Enumerable.Range(1, 31).Select(i => $"parola{i}"));
-        var (rows, leftover) = SentenceWindow.Split(text, minWords: 8, maxWords: 15);
-
-        Assert.Equal(2, rows.Count);
-        Assert.Equal(15, SentenceWindow.CountWords(rows[0]));
-        Assert.Equal(15, SentenceWindow.CountWords(rows[1]));
-        Assert.Equal("parola31", leftover);
-    }
-
-    [Fact]
-    public void IlMassimoNonPuoScendereSottoIlMinimo()
-    {
-        var (rows, leftover) = SentenceWindow.Split("uno due tre", minWords: 10, maxWords: 4);
-
-        Assert.Empty(rows);
-        Assert.Equal("uno due tre", leftover);
-    }
-
-    [Fact]
     public void GliSpaziMultipliNonContanoComeParole()
     {
         Assert.Equal(3, SentenceWindow.CountWords("  una   frase   corta "));

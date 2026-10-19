@@ -51,9 +51,10 @@ Gli screenshot nativi seguenti sono aggiornati alla versione corrente.
 - **Continuità fra le frasi**: con l'opzione attiva il motore di qualità traduce insieme le
   ultime due frasi finali, come una sola. La rifinitura frase per frase lascia il posto a questa
   passata: la pipeline resta veloce (tradotto subito) più una sola rifinitura.
-- **Range di parole per riga**: minimo e massimo configurabili (predefinito 8–15). Sotto il
-  minimo un silenzio non chiude più la frase — così i momenti morti non la spezzano — e oltre il
-  massimo la riga si spezza. Vale solo in traduzione e fuori dalla modalità conversazione.
+- **Range di parole per riga**: minimo e massimo configurabili (predefinito 8–15), applicati alla
+  **trascrizione**. Sotto il minimo un silenzio non chiude l'enunciato — così i momenti morti non
+  spezzano la frase — e al massimo la battuta viene chiusa d'ufficio. Le frasi restano sempre su
+  righe separate. Vale solo in traduzione e fuori dalla modalità conversazione.
 - **Aggiornamenti da GitHub**: scheda *Aggiornamenti* nelle impostazioni. Controlla l'ultima
   release, scarica l'installer, ne verifica lo SHA-256 e lo avvia in silenzio; al termine
   l'applicazione si riapre da sola. Il controllo all'avvio è attivo per impostazione predefinita

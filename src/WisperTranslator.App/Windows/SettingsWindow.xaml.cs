@@ -404,8 +404,8 @@ public partial class SettingsWindow : FluentWindow
         var min = Math.Max(0, _settings.SentenceMinWords);
         var max = Math.Max(min, _settings.SentenceMaxWords);
         SentenceWordsHint.Text = min == 0
-            ? $"Le righe si chiudono sul silenzio e si spezzano oltre {max} parole. Vale solo in traduzione, fuori dalla modalità conversazione."
-            : $"Una riga si chiude su un silenzio solo dopo {min} parole (prima resta aperta, così i momenti morti non spezzano la frase) e si spezza oltre {max}. Vale solo in traduzione, fuori dalla modalità conversazione.";
+            ? $"La trascrizione si chiude sul silenzio e a {max} parole la battuta viene chiusa d'ufficio. Le frasi restano su righe separate. Vale solo in traduzione, fuori dalla modalità conversazione."
+            : $"Il silenzio non chiude la trascrizione prima di {min} parole (così i momenti morti non spezzano la frase) e a {max} parole la battuta viene chiusa d'ufficio. Le frasi restano comunque su righe separate. Vale solo in traduzione, fuori dalla modalità conversazione.";
     }
 
     // --- Aggiornamenti ---

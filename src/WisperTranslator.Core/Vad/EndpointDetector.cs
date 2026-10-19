@@ -48,12 +48,27 @@ public sealed class EndpointDetector
     private int _speechFrames;
     private int _silenceFrames;
     private int _utteranceFrames;
+    private volatile bool _holdSilence;
+    private volatile bool _closeRequested;
 
     public EndpointDetector(EndpointOptions? options = null) => _options = options ?? new EndpointOptions();
 
     public EndpointOptions Options => _options;
 
     public bool InSpeech { get; private set; }
+
+    /// <summary>
+    /// Con il minimo di parole non ancora raggiunto un silenzio non chiude l'enunciato: l'audio
+    /// continua nello stesso enunciato, che quindi viene trascritto come una frase sola.
+    /// </summary>
+    public bool HoldSilence
+    {
+        get => _holdSilence;
+        set => _holdSilence = value;
+    }
+
+    /// <summary>Chiede la chiusura al prossimo frame (massimo di parole raggiunto).</summary>
+    public void RequestClose() => _closeRequested = true;
 
     /// <summary>Durata dell'enunciato in corso (o appena chiuso).</summary>
     public TimeSpan UtteranceDuration => TimeSpan.FromSeconds(_utteranceFrames * _options.FrameSeconds);
@@ -73,6 +88,7 @@ public sealed class EndpointDetector
                 InSpeech = true;
                 _utteranceFrames = _speechFrames;
                 _silenceFrames = 0;
+                _closeRequested = false;
                 return EndpointSignal.SpeechStart;
             }
 
@@ -84,11 +100,13 @@ public sealed class EndpointDetector
 
         var tooLong = _utteranceFrames * _options.FrameSeconds >= _options.MaxUtteranceSeconds;
         var silence = _silenceFrames * _options.FrameSeconds >= _options.MinSilenceSeconds;
-        if (!tooLong && !silence)
+        var forced = _closeRequested;
+        if (!tooLong && !forced && (!silence || _holdSilence))
         {
             return EndpointSignal.None;
         }
 
+        _closeRequested = false;
         InSpeech = false;
         _speechFrames = 0;
         _silenceFrames = 0;
@@ -101,5 +119,6 @@ public sealed class EndpointDetector
         _speechFrames = 0;
         _silenceFrames = 0;
         _utteranceFrames = 0;
+        _closeRequested = false;
     }
 }

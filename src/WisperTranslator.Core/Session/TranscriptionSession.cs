@@ -49,64 +49,9 @@ public sealed class TranscriptionSession : IAsyncDisposable
     private readonly object _continuityGate = new();
     private CancellationTokenSource? _continuityCancellation;
 
-    /// <summary>Righe in attesa di raggiungere il minimo di parole prima di chiudersi.</summary>
-    private readonly Dictionary<int, WordWindow> _wordWindows = [];
-
-    /// <summary>Oltre questo tempo una riga corta si chiude comunque: niente attese eterne.</summary>
-    private static readonly TimeSpan WordWindowLimit = TimeSpan.FromSeconds(10);
-
     private const string TranslationLaneFast = "rapida";
     private const string TranslationLaneQuality = "qualità";
     private const string TranslationLaneContinuity = "due frasi";
-
-    /// <summary>
-    /// Una riga in costruzione: gli enunciati già chiusi più l'ipotesi di quello in corso.
-    /// Tenere separati i pezzi permette di sostituire una ri-decodifica senza duplicarla.
-    /// </summary>
-    private sealed class WordWindow(int cueId, TimeSpan start, int speaker)
-    {
-        public int CueId { get; } = cueId;
-        public TimeSpan Start { get; } = start;
-        public int Speaker { get; } = speaker;
-
-        /// <summary>Enunciati chiusi dentro la finestra (identificativo + testo definitivo).</summary>
-        public List<(int Utterance, string Text)> Closed { get; } = [];
-
-        /// <summary>Ipotesi dell'enunciato in corso, non ancora definitiva.</summary>
-        public string Partial { get; set; } = string.Empty;
-
-        public string Text
-        {
-            get
-            {
-                var text = string.Empty;
-                foreach (var part in Closed)
-                {
-                    text = text.Length == 0 ? part.Text : SentenceWindow.Join(text, part.Text);
-                }
-
-                if (Partial.Length == 0)
-                {
-                    return text;
-                }
-
-                return text.Length == 0 ? Partial : SentenceWindow.Join(text, Partial);
-            }
-        }
-
-        /// <summary>Testo definitivo: chiude l'enunciato in corso e sostituisce una ri-decodifica.</summary>
-        public void Close(int utterance, string text)
-        {
-            Partial = string.Empty;
-            if (Closed.Count > 0 && Closed[^1].Utterance == utterance)
-            {
-                Closed[^1] = (utterance, text);
-                return;
-            }
-
-            Closed.Add((utterance, text));
-        }
-    }
 
     private TranslationServer? _translationServer;
     private TranslationService? _translationService;
@@ -464,6 +409,12 @@ public sealed class TranscriptionSession : IAsyncDisposable
     private void AddLane(IPcmSource source, int speaker)
     {
         var segmenter = new SpeechSegmenter(new SileroVad(AppPaths.VadModelPath));
+        // Con il range attivo il primo enunciato nasce già in attesa del minimo di parole.
+        if (WordRangeEnabled && Options.SentenceMinWords > 0)
+        {
+            segmenter.HoldSilence = true;
+        }
+
         var streaming = _realtimeServer is null ? null : new NeMoRealtimeClient(_realtimeServer.Port);
         var lane = new Lane(
             _lanes.Count,
@@ -622,11 +573,7 @@ public sealed class TranscriptionSession : IAsyncDisposable
             ? lane.Speaker
             : turns is { Count: 1 } single ? single[0].Speaker : Speakers.Unknown;
 
-        if (WordWindowEnabled)
-        {
-            PublishWithWordWindow(lane, update, speaker);
-            return;
-        }
+        ApplyWordRange(lane, update);
 
         PublishCue(
             ResolveCueId(lane.Index, update.UtteranceId),
@@ -639,124 +586,40 @@ public sealed class TranscriptionSession : IAsyncDisposable
             update.Latency);
     }
 
-    /// <summary>Vero quando ogni riga deve rispettare il range di parole scelto.</summary>
-    private bool WordWindowEnabled =>
+    /// <summary>Vero quando il range di parole deve guidare la segmentazione.</summary>
+    private bool WordRangeEnabled =>
         Options.Translate
         && !Options.ConversationMode
         && Options.SentenceMaxWords > 1;
 
     /// <summary>
-    /// Impagina la battuta nel range di parole: sotto il minimo il silenzio non chiude la frase
-    /// (il testo resta in attesa della continuazione), sopra il massimo la riga si spezza.
-    /// Parziali e definitivi della stessa finestra condividono la riga, quindi il testo cresce
-    /// senza salti e un parziale in ritardo non crea una riga fantasma.
+    /// Range di parole applicato alla **trascrizione**: il silenzio non chiude l'enunciato prima
+    /// del minimo (la frase resta una sola, senza incollare due trascrizioni) e al massimo si
+    /// chiude d'ufficio. Le righe restano quelle prodotte dal trascrittore.
     /// </summary>
-    private void PublishWithWordWindow(Lane lane, TranscriptUpdate update, int speaker)
+    private void ApplyWordRange(Lane lane, TranscriptUpdate update)
     {
-        WordWindow? window;
-        lock (_cueGate)
+        if (!WordRangeEnabled)
         {
-            _wordWindows.TryGetValue(lane.Index, out window);
-        }
-
-        var cueId = window?.CueId ?? ResolveCueId(lane.Index, update.UtteranceId);
-        lock (_cueGate)
-        {
-            _cueIds[(lane.Index, update.UtteranceId)] = cueId;
-        }
-
-        var start = window?.Start ?? update.Start;
-        var end = update.Start + update.Duration;
-
-        if (window is null)
-        {
-            window = new WordWindow(cueId, start, speaker);
-        }
-
-        if (!update.IsFinal)
-        {
-            // L'ipotesi dell'enunciato in corso si sostituisce, non si accoda.
-            window.Partial = update.Text.Trim();
-            PublishCue(cueId, speaker, window.Text, isFinal: false, start, end - start, window.Text, update.Latency);
-            SetWordWindow(lane.Index, window);
+            lane.Segmenter.HoldSilence = false;
             return;
         }
 
-        window.Close(update.UtteranceId, update.Text.Trim());
-        var text = window.Text;
-
-        var min = Math.Max(1, Options.SentenceMinWords);
-        var max = Math.Max(min, Options.SentenceMaxWords);
-        var pending = text;
-        var pendingStart = start;
-        var pendingCue = cueId;
-
-        while (SentenceWindow.CountWords(pending) > max)
+        if (update.IsFinal)
         {
-            var (head, tail) = SentenceWindow.Cut(pending, max);
-            var headEnd = SplitEnd(
-                pendingStart,
-                end,
-                SentenceWindow.CountWords(head),
-                SentenceWindow.CountWords(pending));
-            PublishCue(pendingCue, speaker, head, isFinal: true, pendingStart, headEnd - pendingStart,
-                provisional: string.Empty, update.Latency);
-            pendingCue = NextCueId();
-            pendingStart = headEnd;
-            pending = tail;
-        }
-
-        var forceClose = end - pendingStart >= WordWindowLimit;
-        if (SentenceWindow.CountWords(pending) >= min || forceClose)
-        {
-            PublishCue(pendingCue, speaker, pending, isFinal: true, pendingStart, end - pendingStart,
-                provisional: string.Empty, update.Latency);
-            ClearWordWindow(lane.Index);
+            // Enunciato chiuso: il prossimo riparte in attesa del minimo.
+            lane.Segmenter.HoldSilence = Options.SentenceMinWords > 0;
             return;
         }
 
-        // Pausa prima del minimo: la riga resta aperta e aspetta la continuazione.
-        PublishCue(pendingCue, speaker, pending, isFinal: false, pendingStart, end - pendingStart, pending,
-            update.Latency);
-        // Se la riga è stata spezzata, il resto riparte con una finestra nuova; altrimenti la
-        // finestra tiene già tutti i pezzi chiusi.
-        if (pendingCue != cueId)
+        var text = update.Provisional.Length >= update.Text.Length ? update.Provisional : update.Text;
+        var words = SentenceWindow.CountWords(text);
+        lane.Segmenter.HoldSilence = words < Options.SentenceMinWords;
+        if (words >= Options.SentenceMaxWords)
         {
-            window = new WordWindow(pendingCue, pendingStart, speaker);
-            window.Closed.Add((update.UtteranceId, pending));
-        }
-
-        SetWordWindow(lane.Index, window);
-    }
-
-    /// <summary>Stima il confine di una riga spezzata, proporzionale alle parole.</summary>
-    private static TimeSpan SplitEnd(TimeSpan start, TimeSpan end, int headWords, int totalWords)
-    {
-        if (totalWords <= 0)
-        {
-            return end;
-        }
-
-        var span = end - start;
-        return start + TimeSpan.FromTicks((long)(span.Ticks * (double)headWords / totalWords));
-    }
-
-    private void SetWordWindow(int lane, WordWindow window)
-    {
-        lock (_cueGate)
-        {
-            _wordWindows[lane] = window;
+            lane.Segmenter.RequestClose();
         }
     }
-
-    private void ClearWordWindow(int lane)
-    {
-        lock (_cueGate)
-        {
-            _wordWindows.Remove(lane);
-        }
-    }
-
     /// <summary>Id stabile per la coppia corsia+enunciato: parziali e finale restano la stessa riga.</summary>
     private int ResolveCueId(int lane, int utterance)
     {
